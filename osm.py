@@ -22,14 +22,17 @@ import urllib
 import urllib2
 import json
 import pickle
-from collections import namedtuple
 import logging
 import datetime
+import pprint
+import collections
 
 log = logging.getLogger(__name__)
+pp=pprint.PrettyPrinter(indent=4)
 
 DEF_CACHE="osm.cache"
 DEF_CREDS="osm.creds"
+
 
 class OSMException(Exception):
 
@@ -45,20 +48,48 @@ class OSMException(Exception):
                                       self._values,
                                       self._error)
 
-class OSMObject(object):
+
+class OSMObject(collections.MutableMapping):
     
     def __init__(self, osm, accessor, record):
         self._osm = osm
         self._accessor = accessor
         self._record = record
 
-    def __getattr__(self,k):
-        if k in self._record:
-            return self._record[k]
-        raise AttributeError("%r object has no attribute %r" %
-                             (type(self).__name__, k))
+    def __getattr__(self, key):
+        try:
+            return self._record[key]
+        except:
+            raise AttributeError("%r object has no attribute %r" %
+                       (type(self).__name__, key))
 
-class Accessor:
+    def __getitem__(self, key):
+        try:
+            return self._record[key]
+        except:
+            raise KeyError("%r object has no attribute %r" %
+                       (type(self).__name__, key))
+
+    def __setitem__(self, key, value):
+        try:
+            self._record[key] = value
+        except:
+            raise KeyError("%r object has no attribute %r" %
+                       (type(self).__name__, k))
+
+    def __delitem__(self, key):
+        try:
+            del(self._record[key])
+        except:
+            raise KeyError
+
+    def __len__(self):
+        return len(self._record)
+
+    def __iter__(self):
+        return self._record.__iter__()
+
+class Accessor(object):
 
     __cache__ = {}
     
@@ -133,9 +164,11 @@ class Accessor:
 
             self.__class__.__cache_set__(url,data,obj)
 
+        log.debug(pp.pformat(obj))
         return obj
-        
-class Authorisor:
+
+
+class Authorisor(object):
 
     def __init__(self, apiid, token):
         self.apiid = apiid
@@ -162,12 +195,11 @@ class Authorisor:
         self.userid = src.readline()[:-1]
         self.secret = src.readline()[:-1]
 
+
 class Term(OSMObject):
 
     def __init__(self, osm, accessor, record):
         OSMObject.__init__(self, osm, accessor, record)
-
-        self._record = record
 
         self.startdate = datetime.datetime.strptime(record[u'startdate'],
                                                     '%Y-%m-%d')
@@ -178,47 +210,143 @@ class Term(OSMObject):
     def is_active(self):
         now = datetime.datetime.now()
         return ((self.startdate < now) and (self.enddate > now))
-    
+
+class Badge(OSMObject):
+
+    def __init__(self, osm, accessor, details, structure):
+        self.name = details['name']
+        self.table = details['table']
+
+        activities = {}
+        if len(structure) > 1:
+            for activity in [ row['name'] for row in structure[1]['rows'] ]:
+                activities[activity] = ''
+
+        OSMObject.__init__(self, osm, accessor, activities)
+
+
+
+class Badges(OSMObject):
+
+    def __init__(self, osm, accessor, record):
+
+        self._order = record['badgeOrder']
+        self._details = record['details']
+        self._stock = record['stock']
+        self._structure = record['structure']
+
+        badges = {}
+        for badge in self._details.keys():
+            badges[badge] = Badge(osm, accessor,
+                                  self._details[badge],
+                                  self._structure[badge])
+
+
+        OSMObject.__init__(self, osm, accessor, badges)
+
+class Member(OSMObject):
+
+    def __init__(self, osm, accessor, column_map, record):
+        OSMObject.__init__(self, osm, accessor, record)
+
+        self._column_map = column_map
+        for k,v in self._column_map.items():
+            self._column_map[k] = v.replace(' ','')
+
+        self._reverse_column_map = dict((reversed(list(i)) for i in column_map.items()))
+
+
+    def __getattr__(self, key):
+        try:
+            return self._record[key]
+        except:
+
+            try:
+                return self._record[self._reverse_column_map[key]]
+            except:
+                raise AttributeError("%r object has no attribute %r" %
+                              (type(self).__name__, key))
+
+            raise AttributeError("%r object has no attribute %r" %
+                       (type(self).__name__, key))
+
+    def __getitem__(self, key):
+        try:
+            return self._record[key]
+        except:
+            try:
+                return self._record[self._reverse_column_map[key]]
+            except:
+                raise KeyError("%r object has no attribute %r" %
+                    (type(self).__name__, key))
+
+            raise KeyError("%r object has no attribute %r" %
+                       (type(self).__name__, key))
+
+    def __setitem__(self, key, value):
+        try:
+            self._record[key] = value
+        except:
+            try:
+                self._record[self._reverse_column_map[key]] = value
+            except:
+                raise KeyError("%r object has no attribute %r" %
+                       (type(self).__name__, k))
+
+            raise KeyError("%r object has no attribute %r" %
+                       (type(self).__name__, k))
+
+class Members(OSMObject):
+
+    def __init__(self, osm, accessor, column_map, record):
+        self._identifier = record['identifier']
+
+        members = {}
+        for member in record['items']:
+            members[member[self._identifier]] = Member(osm, accessor, column_map, member)
+
+        OSMObject.__init__(self, osm, accessor, members)
+
 class Section(OSMObject):
 
     def __init__(self, osm, accessor, record):
         OSMObject.__init__(self, osm, accessor, record)
-        
+
+        self._member_column_map = record['sectionConfig']['columnNames']
+
         self.terms = [ term for term in osm.terms(self.sectionid)
                        if term.is_active() ]
 
         # TODO - report error if terms has more than one entry.
         self.term = self.terms[0]
         
-        log.debug('TERMS ='+repr(self.terms))
-    
+        self.challenge = self._get_badges('challenge')
+        self.activity = self._get_badges('activity')
+        self.staged = self._get_badges('staged')
+        self.core = self._get_badges('core')
+        self.members = self._get_members()
 
     def __repr__(self):
         return 'Section({0}, "{1}", "{2}")'.format(self.sectionid,
                                                    self.sectionname,
                                                    self.section)
-    
-    def badges(self):
+
+
+    def _get_badges(self,badge_type):
         url="challenges.php?action=getInitialBadges"\
-            "&type=challenge"\
+            "&type={0}"\
             "&sectionid={s.sectionid}"\
             "&section={s.section}"\
             "&termid={s.term.termid}"\
-            .format(s=self)
+            .format(badge_type, s=self)
 
-        url="challenges.php?action=getInitialBadges"\
-            "&type=activity"\
-            "&sectionid={s.sectionid}"\
-            "&section={s.section}"\
-            "&termid={s.term.termid}"\
-            .format(s=self)
+        return Badges(self._osm, self._accessor, self._accessor(url))
 
-        return self._accessor(url)
 
     def events(self):
         pass
 
-    def members(self):
+    def _get_members(self):
         url="users.php?&action=getUserDetails"\
             "&sectionid={s.sectionid}"\
             "&termid={s.term.termid}"\
@@ -226,7 +354,8 @@ class Section(OSMObject):
             "&section={s.section}"\
             .format(s=self)
 
-        return self._accessor(url)
+        return Members(self._osm, self._accessor,
+                       self._member_column_map, self._accessor(url))
 
     
 class OSM:
@@ -236,9 +365,9 @@ class OSM:
 
         self.sections = {}
         self.section = None
-        
+
         self.init()
-        
+
     def init(self):
         roles = self._accessor('api.php?action=getUserRoles')
 
@@ -262,9 +391,7 @@ class OSM:
 
     
 if __name__ == '__main__':
-    import pprint
-    pp=pprint.PrettyPrinter(indent=4)
-    
+
     logging.basicConfig(level=logging.DEBUG)
     log.debug("Debug On\n")
     
@@ -284,7 +411,7 @@ if __name__ == '__main__':
 
     auth = Authorisor(args['<apiid>'],args['<token>'])
     auth.load_from_file(open(DEF_CREDS,'r'))
-    
+
     if args['run']:
         
         accessor = Accessor(auth)
@@ -292,11 +419,21 @@ if __name__ == '__main__':
         pp.pprint(accessor(args['<query>']))
 
 
-    osm = OSM(auth)
+    #osm = OSM(auth)
 
-    log.debug('Sections - {0}\n'.format(osm.sections))
+    #log.debug('Sections - {0}\n'.format(osm.sections))
+
+
+    #for k,v in osm.sections['14324'].members.items():
+    #    log.debug("{0}: {1} {2} {3}".format(k,v.firstname,v.lastname,v.TermtoScouts))
+
+    #for k,v in osm.sections['14324'].activity.items():
+    #    log.debug("{0}: {1}".format(k,v.keys()))
+
 
     #pp.pprint(osm.sections['14324'].members())
-    pp.pprint(osm.sections['14324'].badges())
-    
+    #for k,v in osm.sections['14324'].challenge.items():
+    #    log.debug("{0}: {1}".format(k,v.keys()))
+
+
     Accessor.__cache_save__(open(DEF_CACHE,'w'))
