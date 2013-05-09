@@ -1,0 +1,3 @@
+[console_scripts]
+pyosm = pyosm:main
+

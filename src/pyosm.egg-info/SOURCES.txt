@@ -1,0 +1,11 @@
+MANIFEST.in
+NEWS.txt
+README.rst
+setup.py
+src/pyosm/__init__.py
+src/pyosm.egg-info/PKG-INFO
+src/pyosm.egg-info/SOURCES.txt
+src/pyosm.egg-info/dependency_links.txt
+src/pyosm.egg-info/entry_points.txt
+src/pyosm.egg-info/not-zip-safe
+src/pyosm.egg-info/top_level.txt
