@@ -239,6 +239,7 @@ class Badges(OSMObject):
 
 
 class Member(OSMObject):
+
     def __init__(self, osm, accessor, column_map, record):
         OSMObject.__init__(self, osm, accessor, record)
 
@@ -285,7 +286,50 @@ class Member(OSMObject):
 
 
 class Members(OSMObject):
+    DEFAULT_DICT = {  u'address': '',
+                      u'address2': '',
+                      u'age': u'',
+                      u'custom1': '',
+                      u'custom2': '',
+                      u'custom3': '',
+                      u'custom4': '',
+                      u'custom5': '',
+                      u'custom6': '',
+                      u'custom7': '',
+                      u'custom8': '',
+                      u'custom9': '',
+                      u'dob': u'',
+                      u'email1': '',
+                      u'email2': '',
+                      u'email3': '',
+                      u'email4': '',
+                      u'ethnicity': '',
+                      u'firstname': u'',
+                      u'joined': u'',
+                      u'joining_in_yrs': u'',
+                      u'lastname': u'',
+                      u'medical': '',
+                      u'notes': '',
+                      u'parents': '',
+                      u'patrol': u'',
+                      u'patrolid': u'',
+                      u'patrolleader': u'',
+                      u'phone1': '',
+                      u'phone2': '',
+                      u'phone3': '',
+                      u'phone4': '',
+                      u'religion': '',
+                      u'school': '',
+                      u'scoutid': u'',
+                      u'started': u'',
+                      u'subs': '',
+                      u'type': u'',
+                      u'yrs': 0}
+
     def __init__(self, osm, accessor, column_map, record):
+        self._osm = osm,
+        self._accessor = accessor,
+        self._column_map = column_map
         self._identifier = record['identifier']
 
         members = {}
@@ -294,12 +338,18 @@ class Members(OSMObject):
 
         OSMObject.__init__(self, osm, accessor, members)
 
+    def new_member(self):
+        return Member(self._osm, self._accessor,self._column_map,self.DEFAULT_DICT)
 
 class Section(OSMObject):
     def __init__(self, osm, accessor, record):
         OSMObject.__init__(self, osm, accessor, record)
 
-        self._member_column_map = record['sectionConfig']['columnNames']
+        try:
+            self._member_column_map = record['sectionConfig']['columnNames']
+        except KeyError:
+            log.debug("No extra member columns.")
+            self._member_column_map = {}
 
         self.terms = [term for term in osm.terms(self.sectionid)
                       if term.is_active()]
@@ -401,10 +451,18 @@ if __name__ == '__main__':
         pp.pprint(accessor(args['<query>']))
 
 
-    #osm = OSM(auth)
+    osm = OSM(auth)
 
-    #log.debug('Sections - {0}\n'.format(osm.sections))
+    log.debug('Sections - {0}\n'.format(osm.sections))
 
+
+    test_section = '15797'
+    members = osm.sections[test_section].members
+    new_member = members.new_member()
+    new_member.firstname = "New first"
+    new_member.lastname = "New last"
+    
+    log.debug("New member = {0}: {1}".format(new_member.firstname,new_member.lastname))
 
     #for k,v in osm.sections['14324'].members.items():
     #    log.debug("{0}: {1} {2} {3}".format(k,v.firstname,v.lastname,v.TermtoScouts))
