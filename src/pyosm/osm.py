@@ -17,6 +17,7 @@ Options:
 """
 
 from docopt import docopt
+from copy import deepcopy
 
 import sys
 import urllib
@@ -240,14 +241,16 @@ class Badges(OSMObject):
 
 class Member(OSMObject):
 
-    def __init__(self, osm, accessor, column_map, record):
+    def __init__(self, osm, section, accessor, column_map, record):
         OSMObject.__init__(self, osm, accessor, record)
 
+        self._section = section
         self._column_map = column_map
         for k, v in self._column_map.items():
             self._column_map[k] = v.replace(' ', '')
 
         self._reverse_column_map = dict((reversed(list(i)) for i in column_map.items()))
+        self._changed_keys = []
 
     def __getattr__(self, key):
         try:
@@ -271,12 +274,18 @@ class Member(OSMObject):
                                (type(self).__name__, key))
 
 
+        
     def __setitem__(self, key, value):
         try:
             self._record[key] = value
+            if key not in self._changed_keys:
+                self._changed_keys.append(key)
         except:
             try:
                 self._record[self._reverse_column_map[key]] = value
+                if self._reverse_column_map[key] not in self._changed_keys:
+                    self._changed_keys.append(self._reverse_column_map[key])
+ 
             except:
                 raise KeyError("%r object has no attribute %r" %
                                (type(self).__name__, key))
@@ -285,6 +294,25 @@ class Member(OSMObject):
                            (type(self).__name__, key))
 
 
+    def save(self):
+        """Write the member to the section."""
+        update_url='users.php?action=updateMember&dateFormat=generic'
+        patrol_url='users.php?action=updateMemberPatrol'
+        create_url='users.php?action=newMember'
+
+        if self['scoutid'] == '':
+            # create
+            fields = deepcopy(self._record)
+            fields['sectionid'] = self._section.sectionid
+            #self._accessor(update_url, self._record)
+        else:
+            # update
+            fields = {}
+            for key in self._changed_keys:
+                fields[key] = self._record[key]
+
+        log.debug(fields)
+        
 class Members(OSMObject):
     DEFAULT_DICT = {  u'address': '',
                       u'address2': '',
@@ -326,20 +354,22 @@ class Members(OSMObject):
                       u'type': u'',
                       u'yrs': 0}
 
-    def __init__(self, osm, accessor, column_map, record):
+    def __init__(self, osm, section, accessor, column_map, record):
         self._osm = osm,
+        self._section = section
         self._accessor = accessor,
         self._column_map = column_map
         self._identifier = record['identifier']
 
         members = {}
         for member in record['items']:
-            members[member[self._identifier]] = Member(osm, accessor, column_map, member)
+            members[member[self._identifier]] = Member(osm, section, accessor, column_map, member)
 
         OSMObject.__init__(self, osm, accessor, members)
 
     def new_member(self):
-        return Member(self._osm, self._accessor,self._column_map,self.DEFAULT_DICT)
+        return Member(self._osm, self._section,
+                      self._accessor,self._column_map,self.DEFAULT_DICT)
 
 class Section(OSMObject):
     def __init__(self, osm, accessor, record):
@@ -389,7 +419,7 @@ class Section(OSMObject):
               "&section={s.section}" \
             .format(s=self)
 
-        return Members(self._osm, self._accessor,
+        return Members(self._osm, self, self._accessor,
                        self._member_column_map, self._accessor(url))
 
 
@@ -459,10 +489,11 @@ if __name__ == '__main__':
     test_section = '15797'
     members = osm.sections[test_section].members
     new_member = members.new_member()
-    new_member.firstname = "New first"
-    new_member.lastname = "New last"
+    new_member['firstname'] = "New first"
+    new_member['lastname'] = "New last"
     
     log.debug("New member = {0}: {1}".format(new_member.firstname,new_member.lastname))
+    new_member.save()
 
     #for k,v in osm.sections['14324'].members.items():
     #    log.debug("{0}: {1} {2} {3}".format(k,v.firstname,v.lastname,v.TermtoScouts))
