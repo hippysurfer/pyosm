@@ -17,7 +17,6 @@ Options:
 """
 
 from docopt import docopt
-from copy import deepcopy
 
 import sys
 import urllib
@@ -56,12 +55,12 @@ class OSMObject(collections.MutableMapping):
         self._accessor = accessor
         self._record = record
 
-    def __getattr__(self, key):
-        try:
-            return self._record[key]
-        except:
-            raise AttributeError("%r object has no attribute %r" %
-                                 (type(self).__name__, key))
+    # def __getattr__(self, key):
+    #     try:
+    #         return self._record[key]
+    #     except:
+    #         raise AttributeError("%r object has no attribute %r" %
+    #                              (type(self).__name__, key))
 
     def __getitem__(self, key):
         try:
@@ -99,6 +98,10 @@ class Accessor(object):
         self._auth = authorisor
 
     @classmethod
+    def clear_cache(cls):
+        cls.__cache__ = {}
+
+    @classmethod
     def __cache_save__(cls, cache_file):
         pickle.dump(cls.__cache__, cache_file)
 
@@ -110,13 +113,14 @@ class Accessor(object):
     def __cache_lookup__(cls, url, data):
         k = url + repr(data)
         if k in cls.__cache__:
-            log.debug("Cache hit: ({0}) = {1}\n".format(k,
-                                                        cls.__cache__[k]))
+            log.debug('Cache hit')
+            #log.debug("Cache hit: ({0}) = {1}\n".format(k,
+            #                                            cls.__cache__[k]))
             return cls.__cache__[k]
 
-        log.debug("Cache miss: ({0})\n"\
-                  "Keys: {1}\n".format(k,
-                                       cls.__cache__.keys()))
+        #log.debug("Cache miss: ({0})\n"\
+        #          "Keys: {1}\n".format(k,
+        #                               cls.__cache__.keys()))
 
         return None
 
@@ -124,7 +128,10 @@ class Accessor(object):
     def __cache_set__(cls, url, data, value):
         cls.__cache__[url + repr(data)] = value
 
-    def __call__(self, query, fields=None, authorising=False):
+    def __call__(self, query, fields=None, authorising=False, clear_cache=False, debug=False):
+
+        if clear_cache:
+            self.clear_cache()
 
         url = self.BASE_URL + query
 
@@ -138,6 +145,9 @@ class Accessor(object):
         if fields:
             values.update(fields)
 
+        if debug:
+            log.debug("{0} {1}".format(url, values))
+
         data = urllib.urlencode(values)
 
         req = urllib2.Request(url, data)
@@ -150,21 +160,32 @@ class Accessor(object):
 
             result = response.read()
 
+            
             # Crude test to see if the response is JSON
             # OSM returns a string as an error case.
-            if result[0] not in ('[', '{'):
-                raise OSMException(url, values, result)
+            try:
+                if result[0] not in ('[', '{'):
+                    log.debug("{0} {1}".format(url, values))
+                    raise OSMException(url, values, result)
+            except IndexError:
+                # This means that result is not a list
+                log.debug("{0} {1}".format(url, values))
+                log.error(repr(result))
+                raise
 
             obj = json.loads(result)
 
             if 'error' in obj:
+                log.debug("{0} {1}".format(url, values))
                 raise OSMException(url, values, obj['error'])
             if 'err' in obj:
+                log.debug("{0} {1}".format(url, values))
                 raise OSMException(url, values, obj['err'])
 
             self.__class__.__cache_set__(url, data, obj)
 
-        log.debug(pp.pformat(obj))
+        if debug:
+            log.debug(pp.pformat(obj))
         return obj
 
 
@@ -293,6 +314,15 @@ class Member(OSMObject):
             raise KeyError("%r object has no attribute %r" %
                            (type(self).__name__, key))
 
+    # def remove(self, last_date):
+    #     """Remove the member record."""
+    #     delete_url='users.php?action=deleteMember&type=leaveremove&section={0}'
+    #     delete_url = delete_url.format(self._section.section)
+    #     fields={ 'scouts': ["{0}".format(self.scoutid),],
+    #              'sectionid': self._section.sectionid,
+    #              'date': last_date }
+        
+    #     self._accessor(delete_url, fields, clear_cache=True, debug=True)
 
     def save(self):
         """Write the member to the section."""
@@ -302,16 +332,33 @@ class Member(OSMObject):
 
         if self['scoutid'] == '':
             # create
-            fields = deepcopy(self._record)
-            fields['sectionid'] = self._section.sectionid
-            #self._accessor(update_url, self._record)
+            fields = {}
+            for key in self._changed_keys:
+                fields[key] = self._record[key]
+            fields['sectionid'] = self._section['sectionid']
+            record = self._accessor(create_url, fields, clear_cache=True, debug=True)
+            self['scoutid'] = record['scoutid']
         else:
             # update
             fields = {}
             for key in self._changed_keys:
                 fields[key] = self._record[key]
 
-        log.debug(fields)
+            result = True
+            for key in fields:
+                record = self._accessor(update_url, 
+                                        { 'scoutid': self['scoutid'],
+                                          'column': self._reverse_column_map[key],
+                                          'value': fields[key],
+                                          'sectionid': self._section['sectionid'] }, 
+                                        clear_cache=True, debug=True)
+                if record[self._reverse_column_map[key]] != fields[key]:
+                    result = False
+
+            # TODO handle change to grouping.
+
+            return result
+                
         
 class Members(OSMObject):
     DEFAULT_DICT = {  u'address': '',
@@ -367,9 +414,19 @@ class Members(OSMObject):
 
         OSMObject.__init__(self, osm, accessor, members)
 
-    def new_member(self):
-        return Member(self._osm, self._section,
-                      self._accessor,self._column_map,self.DEFAULT_DICT)
+    def new_member(self, firstname, lastname, dob, startedsection, started):
+        new_member = Member(self._osm, self._section,
+                            self._accessor,self._column_map,self.DEFAULT_DICT)
+        new_member['firstname'] = firstname
+        new_member['lastname'] = lastname
+        new_member['dob'] = dob
+        new_member['startedsection'] = startedsection
+        new_member['started'] = started
+        new_member['patrolid'] = '-1'
+        new_member['patrolleader'] = '0'
+        new_member['phone1'] = ''
+        new_member['email1'] = ''
+        return new_member
 
 class Section(OSMObject):
     def __init__(self, osm, accessor, record):
@@ -381,7 +438,7 @@ class Section(OSMObject):
             log.debug("No extra member columns.")
             self._member_column_map = {}
 
-        self.terms = [term for term in osm.terms(self.sectionid)
+        self.terms = [term for term in osm.terms(self['sectionid'])
                       if term.is_active()]
 
         # TODO - report error if terms has more than one entry.
@@ -394,17 +451,20 @@ class Section(OSMObject):
         self.members = self._get_members()
 
     def __repr__(self):
-        return 'Section({0}, "{1}", "{2}")'.format(self.sectionid,
-                                                   self.sectionname,
-                                                   self.section)
+        return 'Section({0}, "{1}", "{2}")'.format(self['sectionid'],
+                                                   self['sectionname'],
+                                                   self['section'])
 
     def _get_badges(self, badge_type):
         url = "challenges.php?action=getInitialBadges" \
               "&type={0}" \
-              "&sectionid={s.sectionid}" \
-              "&section={s.section}" \
-              "&termid={s.term.termid}" \
-            .format(badge_type, s=self)
+              "&sectionid={1}" \
+              "&section={2}" \
+              "&termid={3}" \
+            .format(badge_type, 
+                    self['sectionid'],
+                    self['section'],
+                    self.term['termid'])
 
         return Badges(self._osm, self._accessor, self._accessor(url))
 
@@ -413,11 +473,13 @@ class Section(OSMObject):
 
     def _get_members(self):
         url = "users.php?&action=getUserDetails" \
-              "&sectionid={s.sectionid}" \
-              "&termid={s.term.termid}" \
+              "&sectionid={0}" \
+              "&termid={1}" \
               "&dateFormat=uk" \
-              "&section={s.section}" \
-            .format(s=self)
+              "&section={2}" \
+            .format(self['sectionid'],
+                    self.term['termid'],
+                    self['section'])
 
         return Members(self._osm, self, self._accessor,
                        self._member_column_map, self._accessor(url))
@@ -440,13 +502,13 @@ class OSM(object):
         for section in [Section(self, self._accessor, role)
                         for role in roles
                         if 'section' in role]:
-            self.sections[section.sectionid] = section
-            if section.isDefault == u'1':
+            self.sections[section['sectionid']] = section
+            if section['isDefault'] == u'1':
                 self.section = section
 
         log.info("Default section = {0}, term = {1}".format(
-            self.section.sectionname,
-            self.section.term.name))
+            self.section['sectionname'],
+            self.section.term['name']))
 
     def terms(self, sectionid):
         return [Term(self, self._accessor, term) for term \
@@ -488,13 +550,18 @@ if __name__ == '__main__':
 
     test_section = '15797'
     members = osm.sections[test_section].members
-    new_member = members.new_member()
-    new_member['firstname'] = "New first"
-    new_member['lastname'] = "New last"
-    
-    log.debug("New member = {0}: {1}".format(new_member.firstname,new_member.lastname))
-    new_member.save()
 
+    member = members[members.keys()[0]]
+    member['special'] = 'changed'
+    member.save()
+    
+    #new_member = members.new_member('New First 2','New Last 2','02/09/2004','02/12/2012','02/11/2012')
+    
+    #log.debug("New member = {0}: {1}".format(new_member.firstname,new_member.lastname))
+    #new_member.save()
+
+    
+        
     #for k,v in osm.sections['14324'].members.items():
     #    log.debug("{0}: {1} {2} {3}".format(k,v.firstname,v.lastname,v.TermtoScouts))
 
