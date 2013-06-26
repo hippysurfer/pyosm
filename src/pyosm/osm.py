@@ -232,7 +232,9 @@ class Term(OSMObject):
 
 
 class Badge(OSMObject):
-    def __init__(self, osm, accessor, details, structure):
+    def __init__(self, osm, accessor, section, badge_type, details, structure):
+        self._section = section
+        self._badge_type = badge_type
         self.name = details['name']
         self.table = details['table']
 
@@ -243,9 +245,27 @@ class Badge(OSMObject):
 
         OSMObject.__init__(self, osm, accessor, activities)
 
+    def get_members(self):
+        url = "challenges.php?"\
+            "&termid={0}" \
+            "&type={1}" \
+            "&sectionid={2}" \
+            "&section={3}" \
+            "&c={4}".format(self._section.term['termid'],
+                            self._badge_type,
+                            self._section['sectionid'],
+                            self._section['section'],
+                            self.name.lower())
+        
+        return [ OSMObject(self._osm,
+                           self._accessor,
+                           record) for record in \
+                           self._accessor(url)['items'] ]
 
 class Badges(OSMObject):
-    def __init__(self, osm, accessor, record):
+    def __init__(self, osm, accessor, record, section, badge_type):
+        self._section = section
+        self._badge_type = badge_type
         self._order = record['badgeOrder']
         self._details = record['details']
         self._stock = record['stock']
@@ -254,6 +274,8 @@ class Badges(OSMObject):
         badges = {}
         for badge in self._details.keys():
             badges[badge] = Badge(osm, accessor,
+                                  self._section,
+                                  self._badge_type,
                                   self._details[badge],
                                   self._structure[badge])
 
@@ -358,7 +380,16 @@ class Member(OSMObject):
             # TODO handle change to grouping.
 
             return result
-                
+
+    def get_badges(self):
+        "Return a list of badges objects for this member."
+
+        ret = []
+        for i in self._section.challenge.values():
+            ret.extend( [ badge for badge in badge.get_members() \
+                          if badge['scoutid'] == self['scoutid'] ] )
+        return ret
+        
         
 class Members(OSMObject):
     DEFAULT_DICT = {  u'address': '',
@@ -451,9 +482,10 @@ class Section(OSMObject):
         self.members = self._get_members()
 
     def __repr__(self):
-        return 'Section({0}, "{1}", "{2}")'.format(self['sectionid'],
-                                                   self['sectionname'],
-                                                   self['section'])
+        return 'Section({0}, "{1}", "{2}")'.format(
+            self['sectionid'],
+            self['sectionname'],
+            self['section'])
 
     def _get_badges(self, badge_type):
         url = "challenges.php?action=getInitialBadges" \
@@ -466,7 +498,8 @@ class Section(OSMObject):
                     self['section'],
                     self.term['termid'])
 
-        return Badges(self._osm, self._accessor, self._accessor(url))
+        return Badges(self._osm, self._accessor,
+                      self._accessor(url), self, badge_type)
 
     def events(self):
         pass
@@ -549,11 +582,14 @@ if __name__ == '__main__':
 
 
     test_section = '15797'
-    members = osm.sections[test_section].members
+    for badge in osm.sections[test_section].challenge.values():
+        log.debug('{0}'.format(badge._record))
+              
+    #members = osm.sections[test_section].members
 
-    member = members[members.keys()[0]]
-    member['special'] = 'changed'
-    member.save()
+    #    member = members[members.keys()[0]]
+    #member['special'] = 'changed'
+    #member.save()
     
     #new_member = members.new_member('New First 2','New Last 2','02/09/2004','02/12/2012','02/11/2012')
     
